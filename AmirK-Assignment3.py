@@ -51,7 +51,7 @@ class OAIdataset(Dataset):
         return sample
 
 
-batch_size = 100
+batch_size = 20
 Ratio = 0.2
 nclass = 5
 device = torch.device('cuda:0')
@@ -111,7 +111,7 @@ group_kfold.get_n_splits(X, y, groups)
 print(group_kfold)
 
 testloader = torch.utils.data.DataLoader(test_dataset,
-                                         batch_size=20,
+                                         batch_size=batch_size,
                                          shuffle=True,
                                          num_workers=0,
                                          pin_memory=False)
@@ -122,12 +122,12 @@ for train_index, test_index in group_kfold.split(X, y, groups):
     valid = torch.utils.data.Subset(Dataset, test_index)
 
     trainloader = torch.utils.data.DataLoader(train,
-                                              batch_size=20,
+                                              batch_size=batch_size,
                                               shuffle=True,
                                               num_workers=0,
                                               pin_memory=False)
     Validloader = torch.utils.data.DataLoader(valid,
-                                              batch_size=20,
+                                              batch_size=batch_size,
                                               shuffle=True,
                                               num_workers=0,
                                               pin_memory=False)
