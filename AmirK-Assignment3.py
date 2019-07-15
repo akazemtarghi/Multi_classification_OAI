@@ -1,4 +1,5 @@
 import torch
+import random
 import torch.nn as nn
 import os
 import pandas as pd
@@ -12,12 +13,31 @@ from sklearn.metrics import roc_curve, auc
 from itertools import cycle
 import torchvision.transforms as transforms
 
-transform = transforms.Compose([transforms.ToTensor()])
+device = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+#transform = transforms.Compose([transforms.ToTensor()])
+
+def set_ultimate_seed(base_seed=777):
+    import random
+    random.seed(base_seed)
+
+    try:
+        import numpy as np
+        np.random.seed(base_seed)
+    except ModuleNotFoundError:
+        print('Module `numpy` has not been found')
+    try:
+        import torch
+        torch.manual_seed(base_seed + 1)
+        torch.cuda.manual_seed_all(base_seed + 2)
+    except ModuleNotFoundError:
+        print('Module `torch` has not been found')
+
 
 class OAIdataset(Dataset):
     """datasetA."""
 
-    def __init__(self, csv_file, root_dir, transform):
+    def __init__(self, csv_file, root_dir, transform=None):
         """
         Args:
             csv_file (string): Path to the csv file with KL grade and ID.
@@ -34,27 +54,26 @@ class OAIdataset(Dataset):
     def __getitem__(self, idx):
 
         img_name = os.path.join(self.root_dir,
-                                str(self.landmarks_frame.iloc[idx, 1]))
+                                str(self.landmarks_frame['ID'].iloc[idx]))
 
         img_name = img_name + '.npy'
         patches, p_id = np.load(img_name)
 
-        if self.landmarks_frame.iloc[idx, 2] == 1:
-            image = Image.fromarray(patches['R'].astype('uint8'))
+        if self.landmarks_frame['SIDE'].iloc[idx] == 1:
+            image = patches['R']
         else:
-            image = Image.fromarray(patches['L'].astype('uint8'))
+            image = patches['L']
         imageID = self.landmarks_frame.iloc[idx, 1]
         landmarks = self.landmarks_frame.iloc[idx, 3]
         if self.transform:
-            image = self.transform(image)
+           image = self.transform(image)
         sample = {'image': image, 'landmarks': landmarks, 'imageID': imageID}
         return sample
 
 
-batch_size = 20
+batch_size = 100
 Ratio = 0.2
 nclass = 5
-device = torch.device('cuda:0')
 Epoch = 15
 learning_rate = 0.001
 
@@ -63,18 +82,18 @@ class Amir(nn.Module):
     def __init__(self, nclass):
         super(Amir, self).__init__()
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(16),
+            nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=2),
             nn.ReLU(),
+            nn.BatchNorm2d(16),
             nn.MaxPool2d(kernel_size=2, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=5, stride=1, padding=2),
-            nn.BatchNorm2d(32),
+            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=2),
             nn.ReLU(),
+            nn.BatchNorm2d(32),
             nn.MaxPool2d(kernel_size=2, stride=2))
 
-        self.fc = nn.Linear(8192, nclass)
+        self.fc = nn.Linear(9248, nclass)
 
     def forward(self, x):
         t = self.layer1(x)
@@ -91,12 +110,22 @@ optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
 Dataset = OAIdataset(csv_file='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/IDnKL.csv',
                      root_dir='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/DatabaseA/',
-                     transform=transform)
+                     transform=None)
+
+#  shuffling the samples but maintain both samples from same ID in train or test
+z = []
+odds = list(range(0, 8894, 2))
+random.shuffle(odds)
+for i in range(4447):
+    z.append(odds[i])
+    z.append(odds[i]+1)
+
+
+
 # Splitting dataset to train and test with 4:1 ratio
-Dataset_size = len(Dataset)
-indices = list(range(Dataset_size))
+Dataset_size = len(z)
 split = int(np.floor(Ratio * Dataset_size))
-train_indices, test_indices = indices[split:], indices[:split]
+train_indices, test_indices = z[split:], z[:split]
 
 train_dataset = torch.utils.data.Subset(Dataset, train_indices)
 test_dataset = torch.utils.data.Subset(Dataset, test_indices)
@@ -111,24 +140,20 @@ group_kfold.get_n_splits(X, y, groups)
 print(group_kfold)
 
 testloader = torch.utils.data.DataLoader(test_dataset,
-                                         batch_size=batch_size,
-                                         shuffle=True,
+                                         batch_size=20,
                                          num_workers=0,
                                          pin_memory=False)
 
-
 for train_index, test_index in group_kfold.split(X, y, groups):
-    train = torch.utils.data.Subset(Dataset, train_index)
-    valid = torch.utils.data.Subset(Dataset, test_index)
+    train_subset = torch.utils.data.Subset(train_dataset, train_index)
+    valid_subset = torch.utils.data.Subset(train_dataset, test_index)
 
-    trainloader = torch.utils.data.DataLoader(train,
-                                              batch_size=batch_size,
-                                              shuffle=True,
+    trainloader = torch.utils.data.DataLoader(train_subset,
+                                              batch_size=20,
                                               num_workers=0,
                                               pin_memory=False)
-    Validloader = torch.utils.data.DataLoader(valid,
-                                              batch_size=batch_size,
-                                              shuffle=True,
+    Validloader = torch.utils.data.DataLoader(valid_subset,
+                                              batch_size=20,
                                               num_workers=0,
                                               pin_memory=False)
 
@@ -150,6 +175,7 @@ for train_index, test_index in group_kfold.split(X, y, groups):
 
             # Iterate over data.
             for data in data_loaders[phase]:
+                optimizer.zero_grad()
 
                 # get the input images and their corresponding labels
                 images = data['image']
@@ -182,7 +208,7 @@ roc_auc = dict()
 y = []
 y_score = torch.ones(1, 5)
 y_score = y_score.cpu().numpy()
-
+n=0
 model.eval()
 with torch.no_grad():
     correct = 0
