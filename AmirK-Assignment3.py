@@ -12,10 +12,28 @@ from torch.autograd import Variable
 from sklearn.metrics import roc_curve, auc
 from itertools import cycle
 import torchvision.transforms as transforms
+from bokeh.io import curdoc
+from bokeh.layouts import column
+from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure
+from functools import partial
+from threading import Thread
+from tornado import gen
+import sys
+import torch
+torch.cuda.current_device()
+
+
+
+
+transforms = transforms.Compose([transforms.ToTensor()])
+
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-#transform = transforms.Compose([transforms.ToTensor()])
+batch_size = 40
+nclass = 5
+Epoch = 10
+learning_rate = 0.001
 
 def set_ultimate_seed(base_seed=777):
     import random
@@ -33,18 +51,57 @@ def set_ultimate_seed(base_seed=777):
     except ModuleNotFoundError:
         print('Module `torch` has not been found')
 
+def SplittingData (root='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/IDnKL.csv',
+                   Ratio = 0.2):
+
+    """ This function split the data into train and test with rate of 4:1
+        data from same ID remain in same group of train or test.
+    """
+
+    file = pd.read_csv(root)
+    file1 = file.copy()
+    file1.drop_duplicates(subset=['ID'], inplace=True)
+    file1 = file1.reset_index(drop=True)
+    file2 = file1['ID']
+    random.shuffle(file2)
+    Dataset_size = len(file2)
+    split = int(np.floor(Ratio * Dataset_size))
+    train_indices, test_indices = file2[split:], file2[:split]
+    Train_split = file.loc[file['ID'].isin(train_indices)]
+    Train_split = Train_split.reset_index(drop=True)
+    Train_split = Train_split.drop(columns=['Unnamed: 0'])
+    test_split = file.loc[file['ID'].isin(test_indices)]
+    test_split = test_split.reset_index(drop=True)
+    test_split = test_split.drop(columns=['Unnamed: 0'])
+
+    return Train_split, test_split
+
+def GroupKFold_Amir(input, n_splits):
+    X = input
+    y = X.landmarks_frame.KL[:]
+    y = y.reset_index(drop=True)
+    groups = X.landmarks_frame.ID[:]
+    group_kfold = GroupKFold(n_splits)
+    group_kfold.get_n_splits(X, y, groups)
+    print(group_kfold)
+    return group_kfold.split(X, y, groups)
+
+
+
+
 
 class OAIdataset(Dataset):
+
     """datasetA."""
 
-    def __init__(self, csv_file, root_dir, transform=None):
+    def __init__(self, csv_file, root_dir, transform):
         """
         Args:
             csv_file (string): Path to the csv file with KL grade and ID.
             root_dir (string): Directory with all the images.
 
         """
-        self.landmarks_frame = pd.read_csv(csv_file)
+        self.landmarks_frame = csv_file
         self.root_dir = root_dir
         self.transform = transform
 
@@ -63,42 +120,51 @@ class OAIdataset(Dataset):
             image = patches['R']
         else:
             image = patches['L']
-        imageID = self.landmarks_frame.iloc[idx, 1]
-        landmarks = self.landmarks_frame.iloc[idx, 3]
+        imageID = self.landmarks_frame['ID'].iloc[idx]
+        landmarks = self.landmarks_frame['KL'].iloc[idx]
         if self.transform:
            image = self.transform(image)
+
         sample = {'image': image, 'landmarks': landmarks, 'imageID': imageID}
         return sample
 
-
-batch_size = 100
-Ratio = 0.2
-nclass = 5
-Epoch = 15
-learning_rate = 0.001
-
-
 class Amir(nn.Module):
     def __init__(self, nclass):
-        super(Amir, self).__init__()
+
+        super(Amir,self).__init__()
+
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=1, padding=2),
-            nn.ReLU(),
+            nn.Conv2d(1, 16, kernel_size=3, stride=1,padding=2),
+            nn.Sigmoid(),
             nn.BatchNorm2d(16),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.MaxPool2d(kernel_size=3, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=3, stride=1, padding=2),
-            nn.ReLU(),
-            nn.BatchNorm2d(32),
-            nn.MaxPool2d(kernel_size=2, stride=2))
+            nn.Conv2d(16, 16, kernel_size=3, padding=2),
+            nn.Sigmoid(),
+            nn.MaxPool2d(kernel_size=3, stride=2))
+        self.layer3 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.Sigmoid())
+        self.layer4 = nn.Sequential(
+            nn.Conv2d(32, 32, kernel_size=3, padding=1),
+            nn.Sigmoid())
 
-        self.fc = nn.Linear(9248, nclass)
+        self.fc = nn.Sequential(nn.Dropout(),
+            nn.Linear(7200, 4096),
+            nn.ReLU(inplace=True),
+            nn.Dropout(),
+            nn.Linear(4096, 4096),
+            nn.ReLU(inplace=True),
+            nn.Linear(4096, nclass))
+
 
     def forward(self, x):
         t = self.layer1(x)
         t = self.layer2(t)
-        t = t.reshape(t.size(0), -1)
+        t = self.layer3(t)
+        t = self.layer4(t)
+        t = t.view(x.size(0), -1)
         t = self.fc(t)
 
         return t
@@ -107,58 +173,55 @@ model = Amir(nclass).to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
+train_Csv, test_Csv = SplittingData()
 
-Dataset = OAIdataset(csv_file='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/IDnKL.csv',
-                     root_dir='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/DatabaseA/',
-                     transform=None)
-
-#  shuffling the samples but maintain both samples from same ID in train or test
-z = []
-odds = list(range(0, 8894, 2))
-random.shuffle(odds)
-for i in range(4447):
-    z.append(odds[i])
-    z.append(odds[i]+1)
-
-
-
-# Splitting dataset to train and test with 4:1 ratio
-Dataset_size = len(z)
-split = int(np.floor(Ratio * Dataset_size))
-train_indices, test_indices = z[split:], z[:split]
-
-train_dataset = torch.utils.data.Subset(Dataset, train_indices)
-test_dataset = torch.utils.data.Subset(Dataset, test_indices)
-
-# deviding train set with Group fold for cross validation
-X = train_dataset
-y = Dataset.landmarks_frame.KL[train_indices]
-y = y.reset_index(drop=True)
-groups = Dataset.landmarks_frame.ID[train_indices]
-group_kfold = GroupKFold(n_splits=5)
-group_kfold.get_n_splits(X, y, groups)
-print(group_kfold)
-
+train_dataset = OAIdataset(csv_file=train_Csv,
+                           root_dir='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/DatabaseA/',
+                           transform=transforms)
+test_dataset = OAIdataset(csv_file=test_Csv,
+                          root_dir='C:/Users/Amir Kazemtarghi/Documents/INTERNSHIP/data/DatabaseA/',
+                          transform=transforms)
 testloader = torch.utils.data.DataLoader(test_dataset,
-                                         batch_size=20,
-                                         num_workers=0,
-                                         pin_memory=False)
+                                          batch_size=batch_size,
+                                          num_workers=0,
+                                          pin_memory=False)
 
-for train_index, test_index in group_kfold.split(X, y, groups):
+g = GroupKFold_Amir(train_dataset,n_splits=5)
+
+Data = {'epochs': [],'trainlosses': [],'vallosses': [] }
+source = ColumnDataSource(Data)
+
+plot = figure()
+plot.line(x= 'epochs', y='trainlosses',
+ color='green', alpha=0.8, legend='Train loss', line_width=2,
+ source=source)
+plot.line(x= 'epochs', y='vallosses',
+ color='red', alpha=0.8, legend='Val loss', line_width=2,
+ source=source)
+
+doc = curdoc()
+# Add the plot to the current document
+doc.add_root(plot)
+@gen.coroutine
+def update(new_data):
+    source.stream(new_data)
+valid_loss = []
+
+for train_index, test_index in g:
     train_subset = torch.utils.data.Subset(train_dataset, train_index)
     valid_subset = torch.utils.data.Subset(train_dataset, test_index)
 
     trainloader = torch.utils.data.DataLoader(train_subset,
-                                              batch_size=20,
+                                              batch_size=batch_size,
                                               num_workers=0,
                                               pin_memory=False)
-    Validloader = torch.utils.data.DataLoader(valid_subset,
-                                              batch_size=20,
+    validloader = torch.utils.data.DataLoader(valid_subset,
+                                              batch_size=batch_size,
                                               num_workers=0,
                                               pin_memory=False)
 
-    data_loaders = {"train": trainloader, "val": Validloader}
-    data_lengths = {"train": len(trainloader), "val": len(Validloader)}
+    data_loaders = {"train": trainloader, "val": validloader}
+    data_lengths = {"train": len(trainloader), "val": len(validloader)}
 
     for epoch in range(Epoch):
         print('Epoch {}/{}'.format(epoch, Epoch - 1))
@@ -199,7 +262,21 @@ for train_index, test_index in group_kfold.split(X, y, groups):
                 running_loss += loss.item()
 
             epoch_loss = running_loss / data_lengths[phase]
+
+            if phase == 'train':
+                train_loss = epoch_loss # Set model to training mode
+            else:
+                valid_loss = epoch_loss
+
+            new_data = {'epochs': [epoch],
+                        'trainlosses': [train_loss],
+                        'vallosses': [valid_loss]}
+            doc.add_next_tick_callback(partial(update, new_data))
+
+
             print('{} Loss: {:.4f}'.format(phase, epoch_loss))
+
+
 
 
 fpr = dict()
@@ -270,6 +347,10 @@ plt.ylabel('True Positive Rate')
 plt.title('Some extension of Receiver operating characteristic to multi-class')
 plt.legend(loc="lower right")
 plt.show()
+
+
+
+
 
 
 
