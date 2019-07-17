@@ -6,5 +6,9 @@ ROC curve for DatabaseA (80-20 training- 15 epoch)
 
 
 
+ROC curve for DatabaseA (80-20 training- 10 epoch)- Modified-v.1
+![alt text](https://github.com/akazemtarghi/assignment3/blob/master/Figure_2.png)
+
+
 
 
