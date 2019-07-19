@@ -2,6 +2,9 @@ import os
 import os
 
 
+
+
+
 import torch
 import random
 import torch.nn as nn
@@ -163,8 +166,7 @@ class Amir(nn.Module):
             nn.Dropout(),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
-            nn.Linear(4096, nclass),
-            nn.Softmax())
+            nn.Linear(4096, nclass))
 
 
     def forward(self, x):
