@@ -1,7 +1,11 @@
+import os
+import os
+os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+
 import torch
 import random
 import torch.nn as nn
-import os
+
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
@@ -21,16 +25,16 @@ from threading import Thread
 from tornado import gen
 import sys
 import torch
-torch.cuda.current_device()
-
-
 
 
 transforms = transforms.Compose([transforms.ToTensor()])
 
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-batch_size = 40
+#device = 'cpu'
+
+
+batch_size = 10
 nclass = 5
 Epoch = 10
 learning_rate = 0.001
@@ -86,6 +90,10 @@ def GroupKFold_Amir(input, n_splits):
     print(group_kfold)
     return group_kfold.split(X, y, groups)
 
+def weight_init(m):
+    if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
+        nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
+        nn.init.zeros_(m.bias)
 
 
 
@@ -140,7 +148,7 @@ class Amir(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=3, padding=2),
+            nn.Conv2d(16, 16, kernel_size=5, padding=2),
             nn.Sigmoid(),
             nn.MaxPool2d(kernel_size=3, stride=2))
         self.layer3 = nn.Sequential(
@@ -169,7 +177,10 @@ class Amir(nn.Module):
 
         return t
 
+
 model = Amir(nclass).to(device)
+
+
 criterion = nn.CrossEntropyLoss()
 optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -188,26 +199,20 @@ testloader = torch.utils.data.DataLoader(test_dataset,
 
 g = GroupKFold_Amir(train_dataset,n_splits=5)
 
-Data = {'epochs': [],'trainlosses': [],'vallosses': [] }
-source = ColumnDataSource(Data)
+fpr = dict()
+tpr = dict()
+roc_auc = dict()
+y = []
+y_score = torch.ones(1, 5)
+y_score = y_score.cpu().numpy()
+n = 0
 
-plot = figure()
-plot.line(x= 'epochs', y='trainlosses',
- color='green', alpha=0.8, legend='Train loss', line_width=2,
- source=source)
-plot.line(x= 'epochs', y='vallosses',
- color='red', alpha=0.8, legend='Val loss', line_width=2,
- source=source)
-
-doc = curdoc()
-# Add the plot to the current document
-doc.add_root(plot)
-@gen.coroutine
-def update(new_data):
-    source.stream(new_data)
-valid_loss = []
 
 for train_index, test_index in g:
+    model = Amir(nclass).to(device)
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
     train_subset = torch.utils.data.Subset(train_dataset, train_index)
     valid_subset = torch.utils.data.Subset(train_dataset, test_index)
 
@@ -239,14 +244,15 @@ for train_index, test_index in g:
             # Iterate over data.
             for data in data_loaders[phase]:
                 optimizer.zero_grad()
-
                 # get the input images and their corresponding labels
                 images = data['image']
                 key_pts = data['landmarks']
                 images = images.to(device)
                 key_pts = key_pts.to(device)
+
+                print(key_pts)
+
                 # wrap them in a torch Variable
-                images, key_pts = Variable(images), Variable(key_pts)
                 output_pts = model(images)
                 # calculate the loss between predicted and target keypoints
                 loss = criterion(output_pts, key_pts)
@@ -262,50 +268,28 @@ for train_index, test_index in g:
                 running_loss += loss.item()
 
             epoch_loss = running_loss / data_lengths[phase]
-
-            if phase == 'train':
-                train_loss = epoch_loss # Set model to training mode
-            else:
-                valid_loss = epoch_loss
-
-            new_data = {'epochs': [epoch],
-                        'trainlosses': [train_loss],
-                        'vallosses': [valid_loss]}
-            doc.add_next_tick_callback(partial(update, new_data))
-
-
             print('{} Loss: {:.4f}'.format(phase, epoch_loss))
 
+    model.eval()
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        for data in testloader:
+            images = data['image']
+            key_pts = data['landmarks']
+            images = images.to(device)
+            key_pts = key_pts.to(device)
+            outputs = model(images)
+            _ , predicted = torch.max(outputs.data, 1)
+            OUTPUT = outputs.cpu().numpy()
+            KEY_PTS = key_pts.cpu().numpy()
+            y_score = np.append(y_score, OUTPUT, axis=0)
+            y = np.append(y, KEY_PTS, axis=0)
+            total += key_pts.size(0)
+            correct += (predicted == key_pts).sum().item()
 
-
-
-fpr = dict()
-tpr = dict()
-roc_auc = dict()
-y = []
-y_score = torch.ones(1, 5)
-y_score = y_score.cpu().numpy()
-n=0
-model.eval()
-with torch.no_grad():
-    correct = 0
-    total = 0
-    i=0
-    for data in testloader:
-        images = data['image']
-        key_pts = data['landmarks']
-        images = images.to(device)
-        key_pts = key_pts.to(device)
-        outputs = model(images)
-        _ , predicted = torch.max(outputs.data, 1)
-        OUTPUT = outputs.cpu().numpy()
-        KEY_PTS = key_pts.cpu().numpy()
-        y_score = np.append(y_score, OUTPUT, axis=0)
-        y = np.append(y, KEY_PTS, axis=0)
-        total += key_pts.size(0)
-        correct += (predicted == key_pts).sum().item()
-
-    print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))
+        print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))
+        # model.apply(weight_init)
 
 
 # creating boolean matrix instead of one array
