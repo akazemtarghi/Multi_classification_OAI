@@ -1,6 +1,6 @@
 import os
 import os
-os.environ['CUDA_LAUNCH_BLOCKING'] = "1"
+
 
 import torch
 import random
@@ -36,8 +36,15 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 batch_size = 10
 nclass = 5
-Epoch = 10
+Epoch = 2
 learning_rate = 0.001
+
+def Normalization(input):
+
+    for i in range(len(input)):
+        input = (input[i, :] - torch.min(input[i, :])) / (torch.max(input[i, :]) - torch.min(input[i, :]))
+
+    return input
 
 def set_ultimate_seed(base_seed=777):
     import random
@@ -90,14 +97,6 @@ def GroupKFold_Amir(input, n_splits):
     print(group_kfold)
     return group_kfold.split(X, y, groups)
 
-def weight_init(m):
-    if isinstance(m, nn.Conv2d) or isinstance(m, nn.ConvTranspose2d):
-        nn.init.xavier_uniform_(m.weight, gain=nn.init.calculate_gain('relu'))
-        nn.init.zeros_(m.bias)
-
-
-
-
 class OAIdataset(Dataset):
 
     """datasetA."""
@@ -142,21 +141,21 @@ class Amir(nn.Module):
         super(Amir,self).__init__()
 
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=1,padding=2),
+            nn.Conv2d(1, 8, kernel_size=3, stride=1,padding=2),
             nn.Sigmoid(),
-            nn.BatchNorm2d(16),
+            nn.BatchNorm2d(8),
             nn.MaxPool2d(kernel_size=3, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=5, padding=2),
-            nn.Sigmoid(),
+            nn.Conv2d(8, 16, kernel_size=5, padding=2),
+            nn.ReLU(),
             nn.MaxPool2d(kernel_size=3, stride=2))
         self.layer3 = nn.Sequential(
             nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.Sigmoid())
+            nn.ReLU())
         self.layer4 = nn.Sequential(
             nn.Conv2d(32, 32, kernel_size=3, padding=1),
-            nn.Sigmoid())
+            nn.ReLU())
 
         self.fc = nn.Sequential(nn.Dropout(),
             nn.Linear(7200, 4096),
@@ -164,7 +163,8 @@ class Amir(nn.Module):
             nn.Dropout(),
             nn.Linear(4096, 4096),
             nn.ReLU(inplace=True),
-            nn.Linear(4096, nclass))
+            nn.Linear(4096, nclass),
+            nn.Softmax())
 
 
     def forward(self, x):
@@ -176,6 +176,70 @@ class Amir(nn.Module):
         t = self.fc(t)
 
         return t
+
+
+def Training_dataset(data_loaders, data_lengths, model, optimizer, criterion, Epoch):
+
+    for epoch in range(Epoch):
+        print('Epoch {}/{}'.format(epoch, Epoch - 1))
+        print('-' * 20)
+        # Each epoch has a training and validation phase
+        for phase in ['train', 'val']:
+            if phase == 'train':
+                model.train(True)  # Set model to training mode
+            else:
+                model.train(False)  # Set model to evaluate mode
+            running_loss = 0.0
+            # Iterate over data.
+            for data in data_loaders[phase]:
+                optimizer.zero_grad()
+                # get the input images and their corresponding labels
+                images = data['image']
+                key_pts = data['landmarks']
+                images = images.to(device)
+                key_pts = key_pts.to(device)
+
+                # wrap them in a torch Variable
+                output_pts = model(images)
+                # calculate the loss between predicted and target keypoints
+                loss = criterion(output_pts, key_pts)
+                # zero the parameter (weight) gradients
+                # backward + optimize only if in training phase
+                if phase == 'train':
+                    loss.backward()
+                    # update the weights
+                    optimizer.step()
+
+                # print loss statistics
+                running_loss += loss.item()
+
+            epoch_loss = running_loss / data_lengths[phase]
+            print('{} Loss: {:.4f}'.format(phase, epoch_loss))
+
+def Testing_dataset(testloader, model):
+    y = []
+    y_score = torch.ones(1, 5)
+    y_score = y_score.cpu().numpy()
+    model.eval()
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        for data in testloader:
+            images = data['image']
+            key_pts = data['landmarks']
+            images = images.to(device)
+            key_pts = key_pts.to(device)
+            output1 = model(images)
+            output1 = Normalization(output1)
+            _, predicted = torch.max(output1.data, 1)
+            output2 = output1.cpu().numpy()
+            KEY_PTS = key_pts.cpu().numpy()
+            y_score = np.append(y_score, output2, axis=0)
+            y = np.append(y, KEY_PTS, axis=0)
+            total += key_pts.size(0)
+            correct += (predicted == key_pts).sum().item()
+
+        print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))
 
 
 model = Amir(nclass).to(device)
@@ -197,18 +261,16 @@ testloader = torch.utils.data.DataLoader(test_dataset,
                                           num_workers=0,
                                           pin_memory=False)
 
-g = GroupKFold_Amir(train_dataset,n_splits=5)
+Groupkfold = GroupKFold_Amir(train_dataset,n_splits=5)
 
 fpr = dict()
 tpr = dict()
 roc_auc = dict()
-y = []
-y_score = torch.ones(1, 5)
-y_score = y_score.cpu().numpy()
+
 n = 0
 
 
-for train_index, test_index in g:
+for train_index, test_index in Groupkfold:
     model = Amir(nclass).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -227,69 +289,13 @@ for train_index, test_index in g:
 
     data_loaders = {"train": trainloader, "val": validloader}
     data_lengths = {"train": len(trainloader), "val": len(validloader)}
+    Training_dataset(data_loaders, data_lengths, model, optimizer, criterion, Epoch)
+    Testing_dataset(testloader, model)
 
-    for epoch in range(Epoch):
-        print('Epoch {}/{}'.format(epoch, Epoch - 1))
-        print('-' * 10)
 
-        # Each epoch has a training and validation phase
-        for phase in ['train', 'val']:
-            if phase == 'train':
-                model.train(True)  # Set model to training mode
-            else:
-                model.train(False)  # Set model to evaluate mode
 
-            running_loss = 0.0
 
-            # Iterate over data.
-            for data in data_loaders[phase]:
-                optimizer.zero_grad()
-                # get the input images and their corresponding labels
-                images = data['image']
-                key_pts = data['landmarks']
-                images = images.to(device)
-                key_pts = key_pts.to(device)
 
-                print(key_pts)
-
-                # wrap them in a torch Variable
-                output_pts = model(images)
-                # calculate the loss between predicted and target keypoints
-                loss = criterion(output_pts, key_pts)
-                # zero the parameter (weight) gradients
-                optimizer.zero_grad()
-                # backward + optimize only if in training phase
-                if phase == 'train':
-                    loss.backward()
-                    # update the weights
-                    optimizer.step()
-
-                # print loss statistics
-                running_loss += loss.item()
-
-            epoch_loss = running_loss / data_lengths[phase]
-            print('{} Loss: {:.4f}'.format(phase, epoch_loss))
-
-    model.eval()
-    with torch.no_grad():
-        correct = 0
-        total = 0
-        for data in testloader:
-            images = data['image']
-            key_pts = data['landmarks']
-            images = images.to(device)
-            key_pts = key_pts.to(device)
-            outputs = model(images)
-            _ , predicted = torch.max(outputs.data, 1)
-            OUTPUT = outputs.cpu().numpy()
-            KEY_PTS = key_pts.cpu().numpy()
-            y_score = np.append(y_score, OUTPUT, axis=0)
-            y = np.append(y, KEY_PTS, axis=0)
-            total += key_pts.size(0)
-            correct += (predicted == key_pts).sum().item()
-
-        print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))
-        # model.apply(weight_init)
 
 
 # creating boolean matrix instead of one array
