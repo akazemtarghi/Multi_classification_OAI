@@ -23,6 +23,7 @@ import sys
 import torch
 from tensorboardX import SummaryWriter
 import torchvision
+from torch.optim.lr_scheduler import StepLR
 
 def tensorboardx(train_dataset, writer, model):
     trainloader = torch.utils.data.DataLoader(train_dataset,
@@ -178,30 +179,25 @@ class Amir(nn.Module):
             nn.MaxPool2d(kernel_size=3, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 16, kernel_size=3, padding=2),
+            nn.Conv2d(16, 32, kernel_size=3, padding=2),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=3, stride=2))
         self.layer3 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=3, padding=1),
-            nn.ReLU())
-        self.layer4 = nn.Sequential(
             nn.Conv2d(32, 32, kernel_size=3, padding=1),
             nn.ReLU())
+
 
         self.fc = nn.Sequential(nn.Dropout(),
             nn.Linear(8192, 4096),
             nn.ReLU(inplace=True),
             nn.Dropout(),
-            nn.Linear(4096, 2048),
-            nn.ReLU(inplace=True),
-            nn.Linear(2048, nclass))
+            nn.Linear(4096, nclass))
 
 
     def forward(self, x):
         t = self.layer1(x)
         t = self.layer2(t)
         t = self.layer3(t)
-        t = self.layer4(t)
         t = t.view(x.size(0), -1)
         t = self.fc(t)
 
@@ -223,6 +219,8 @@ def Training_dataset(data_loaders, model, patience, n_epochs, namefold):
 
 
     for epoch in range(n_epochs):
+        scheduler.step()
+        print('Epoch:', epoch, 'LR:', scheduler.get_lr())
 
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
@@ -317,7 +315,8 @@ def Testing_dataset(testloader, model,y_score_sum):
         print('Test Accuracy of the model on the test images: {} %'.format(100 * correct / total))
         return y_score_sum, y
 
-def roc_curve(y_score_sum, y):
+
+def roc_curve_function(y_score_sum, y):
     fpr = dict()
     tpr = dict()
     roc_auc = dict()
@@ -361,13 +360,13 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor)
 batch_size = 50
 nclass = 5
 Epoch = 100
-learning_rate = 0.001
+learning_rate = 0.1
 
 model = Amir(nclass).to(device)
 A = Amir(nclass)
 
 criterion = nn.CrossEntropyLoss()
-optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, nesterov=True)
 
 train_Csv, test_Csv = SplittingData()
 
@@ -396,7 +395,8 @@ for train_index, test_index in Groupkfold:
     namefold = 'Fold' + str(nfold)
     model = Amir(nclass).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, nesterov=True)
+    scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
 
     train_subset = torch.utils.data.Subset(train_dataset, train_index)
     valid_subset = torch.utils.data.Subset(train_dataset, test_index)
@@ -417,12 +417,11 @@ for train_index, test_index in Groupkfold:
     nfold = nfold + 1
 
 # Computing ROC
-roc_auc, fpr, tpr = roc_curve(y_score_sum, y)
+roc_auc, fpr, tpr = roc_curve_function(y_score_sum, y)
 
 # plotting ROC
 lw = 2
 colors = cycle(['aqua', 'darkorange', 'cornflowerblue','red','gray'])
-plt.switch_backend('agg')
 fig1 = plt.figure()
 for i, color in zip(range(5), colors):
     plt.plot(fpr[i], tpr[i], color=color, lw=lw,
@@ -441,7 +440,7 @@ writer.add_figure('roc', fig1)
 
 
 # visualize the loss as the network trained
-fig = plt.figure()
+fig2 = plt.figure()
 plt.plot(range(1,len(train_loss)+1), train_loss, label='Training Loss')
 plt.plot(range(1,len(valid_loss)+1), valid_loss, label='Validation Loss')
 
@@ -455,8 +454,8 @@ plt.grid(True)
 plt.legend()
 plt.tight_layout()
 plt.show()
-fig.savefig('loss_plot.png', bbox_inches='tight')
-writer.add_figure('minimum loss', fig)
+# fig2.savefig('loss_plot.png', bbox_inches='tight')
+writer.add_figure('minimum loss', fig2)
 
 
 
