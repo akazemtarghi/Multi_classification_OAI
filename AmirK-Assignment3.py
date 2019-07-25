@@ -162,19 +162,21 @@ class Amir(nn.Module):
         super(Amir,self).__init__()
 
         self.layer1 = nn.Sequential(
-            nn.Conv2d(1, 16, kernel_size=3, stride=1,padding=2),
+            nn.Conv2d(1, 8, kernel_size=3, stride=1,padding=2),
+            nn.BatchNorm2d(8),
             nn.ReLU(),
-            nn.BatchNorm2d(16),
             nn.MaxPool2d(kernel_size=3, stride=2))
 
         self.layer2 = nn.Sequential(
-            nn.Conv2d(16, 32, kernel_size=3, padding=2),
+            nn.Conv2d(8, 16, kernel_size=3, padding=2),
             nn.ReLU(),
             nn.MaxPool2d(kernel_size=3, stride=2))
         self.layer3 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=3, padding=1),
+            nn.ReLU())
+        self.layer4 = nn.Sequential(
             nn.Conv2d(32, 32, kernel_size=3, padding=1),
             nn.ReLU())
-
 
         self.fc = nn.Sequential(nn.Dropout(),
             nn.Linear(8192, 4096),
@@ -187,6 +189,7 @@ class Amir(nn.Module):
         t = self.layer1(x)
         t = self.layer2(t)
         t = self.layer3(t)
+        t = self.layer4(t)
         t = t.view(x.size(0), -1)
         t = self.fc(t)
 
@@ -385,7 +388,7 @@ for train_index, test_index in Groupkfold:
     model = Amir(nclass).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, nesterov=True)
-    scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
+    scheduler = StepLR(optimizer, step_size=20, gamma=0.1)
 
     train_subset = torch.utils.data.Subset(train_dataset, train_index)
     valid_subset = torch.utils.data.Subset(train_dataset, test_index)
