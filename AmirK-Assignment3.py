@@ -208,13 +208,13 @@ def Training_dataset(data_loaders, model, patience, n_epochs, namefold):
 
 
     for epoch in range(n_epochs):
-        scheduler.step()
         print('LR:', scheduler.get_lr())
 
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
             if phase == 'train':
                 model.train(True)  # Set model to training mode
+                scheduler.step()
             else:
                 model.train(False)  # Set model to evaluate mode
             # Iterate over data.
@@ -349,7 +349,7 @@ torch.set_default_tensor_type(torch.cuda.FloatTensor)
 batch_size = 50
 nclass = 5
 Epoch = 100
-learning_rate = 0.1
+learning_rate = 0.01
 
 model = Amir(nclass).to(device)
 A = Amir(nclass)
@@ -385,7 +385,7 @@ for train_index, test_index in Groupkfold:
     model = Amir(nclass).to(device)
     criterion = nn.CrossEntropyLoss().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9, nesterov=True)
-    scheduler = StepLR(optimizer, step_size=1, gamma=0.1)
+    scheduler = StepLR(optimizer, step_size=15, gamma=0.1)
 
     train_subset = torch.utils.data.Subset(train_dataset, train_index)
     valid_subset = torch.utils.data.Subset(train_dataset, test_index)
