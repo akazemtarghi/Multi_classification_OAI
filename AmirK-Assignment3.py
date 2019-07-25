@@ -209,7 +209,7 @@ def Training_dataset(data_loaders, model, patience, n_epochs, namefold):
 
     for epoch in range(n_epochs):
         scheduler.step()
-        print('Epoch:', epoch, 'LR:', scheduler.get_lr())
+        print('LR:', scheduler.get_lr())
 
         # Each epoch has a training and validation phase
         for phase in ['train', 'val']:
