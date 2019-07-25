@@ -5,22 +5,11 @@ import os
 import pandas as pd
 import matplotlib.pyplot as plt
 from torch.utils.data import Dataset
-from PIL import Image
 import numpy as np
 from sklearn.model_selection import GroupKFold
-from torch.autograd import Variable
 from sklearn.metrics import roc_curve, auc
 from itertools import cycle
 import torchvision.transforms as transforms
-from bokeh.io import curdoc
-from bokeh.layouts import column
-from bokeh.models import ColumnDataSource
-from bokeh.plotting import figure
-from functools import partial
-from threading import Thread
-from tornado import gen
-import sys
-import torch
 from tensorboardX import SummaryWriter
 import torchvision
 from torch.optim.lr_scheduler import StepLR
