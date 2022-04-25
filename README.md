@@ -1,5 +1,6 @@
-# assignment3
-python code for assignment3- multi-class classification 
+# Osteoarthritis Prediction  
+
+python code for multi-class classification Osteoarthritis based on KL grade. Pytorch lib has been used for this implementation. 
 
 ROC curve for DatabaseA (80-20 training- 15 epoch)
 ![alt text](https://github.com/akazemtarghi/assignment3/blob/master/Figure_1.png)
